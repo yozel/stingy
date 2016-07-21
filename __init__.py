@@ -1,6 +1,7 @@
 import binascii
 import ctypes
 import datetime
+import math
 from itertools import chain
 
 
@@ -167,21 +168,16 @@ class MultipleChoiceField(BaseStingyField):
 
     def pack(self, value):
         binary_ids = set(map(self.choices.index, value))
-        decimal_sum = sum([2 ** id for id in binary_ids])
-        return {self.prefix('mcho'): decimal_sum}
+        return {self.prefix('mcho'): sum(2 ** i for i in binary_ids)}
 
     def unpack(self, data):
         choices_sum = getattr(data, self.prefix('mcho'))
-
-        values = set()
-        for i, choice in reversed(list(enumerate(self.choices))):
-            binary_index = 2 ** i
-            if binary_index <= choices_sum:
-                values.add(choice)
-                choices_sum -= binary_index
-                if choices_sum == 0:
-                    break
-        return values
+        result = set()
+        while choices_sum:
+            i = int(math.log(choices_sum, 2))
+            choices_sum -= 2 ** i
+            result.add(self.choices[i])
+        return result
 
 
 class StingyMeta(type):
