@@ -1,7 +1,6 @@
 import binascii
 import ctypes
 import datetime
-import math
 from itertools import chain
 
 
@@ -41,8 +40,8 @@ class NumberField(BaseStingyField):
         assert value.bit_length() <= self.num_bits
         return {self.prefix('num'): value}
 
-    def unpack(self, data):
-        return int(getattr(data, self.prefix('num')))
+    def unpack(self, sub_fields):
+        return int(getattr(sub_fields, self.prefix('num')))
 
 
 class BooleanField(BaseStingyField):
@@ -51,15 +50,15 @@ class BooleanField(BaseStingyField):
         self.num_bits = 1
 
     def prepare_structure(self):
-        self.structure_fields = [(self.prefix('bool'), ctypes.c_ubyte,
+        self.structure_fields = [(self.prefix('bool'), ctypes.c_uint,
                                   self.num_bits)]
 
     def pack(self, value):
         assert type(value) is bool
         return {self.prefix('bool'): value}
 
-    def unpack(self, data):
-        return bool(getattr(data, self.prefix('bool')))
+    def unpack(self, sub_fields):
+        return bool(getattr(sub_fields, self.prefix('bool')))
 
 
 class HexField(BaseStingyField):
@@ -78,8 +77,8 @@ class HexField(BaseStingyField):
         return {self.prefix('hex'): self.array.from_buffer(
                 bytearray.fromhex(value))}
 
-    def unpack(self, data):
-        return binascii.hexlify(getattr(data, self.prefix('hex')))
+    def unpack(self, sub_fields):
+        return binascii.hexlify(getattr(sub_fields, self.prefix('hex')))
 
 
 class ChoiceField(BaseStingyField):
@@ -95,8 +94,8 @@ class ChoiceField(BaseStingyField):
     def pack(self, value):
         return {self.prefix('cho'): self.choices.index(value)}
 
-    def unpack(self, data):
-        choice_index = getattr(data, self.prefix('cho'))
+    def unpack(self, sub_fields):
+        choice_index = getattr(sub_fields, self.prefix('cho'))
         return self.choices[choice_index]
 
 
@@ -113,10 +112,10 @@ class DateField(BaseStingyField):
                 self.prefix('month'): value.month,
                 self.prefix('day'): value.day}
 
-    def unpack(self, data):
-        year = getattr(data, self.prefix('year'))
-        month = getattr(data, self.prefix('month'))
-        day = getattr(data, self.prefix('day'))
+    def unpack(self, sub_fields):
+        year = getattr(sub_fields, self.prefix('year'))
+        month = getattr(sub_fields, self.prefix('month'))
+        day = getattr(sub_fields, self.prefix('day'))
 
         return datetime.date(2000 + year, month, day)
 
@@ -148,11 +147,11 @@ class ListField(BaseStingyField):
             result.update(field.pack(value))
         return result
 
-    def unpack(self, data):
-        size = getattr(data, self.prefix('size'))
+    def unpack(self, sub_fields):
+        size = getattr(sub_fields, self.prefix('size'))
         result = []
         for field in self.fields[:size]:
-            result.append(field.unpack(data))
+            result.append(field.unpack(sub_fields))
         return result
 
 
@@ -160,24 +159,24 @@ class MultipleChoiceField(BaseStingyField):
     def __init__(self, choices):
         super(MultipleChoiceField, self).__init__()
         self.choices = choices
-        self.num_bits = len(choices)
+        self.choice_mapping = {}
 
     def prepare_structure(self):
-        self.structure_fields = [(self.prefix('mcho'), ctypes.c_uint,
-                                  self.num_bits)]
+        self.structure_fields = []
+        for i, choice in enumerate(self.choices):
+            bitfield_key = self.prefix('mcho%s' % i)
+            self.structure_fields.append((bitfield_key, ctypes.c_uint, 1))
+            self.choice_mapping[choice] = bitfield_key
 
-    def pack(self, value):
-        binary_ids = set(map(self.choices.index, value))
-        return {self.prefix('mcho'): sum(2 ** i for i in binary_ids)}
+    def pack(self, values):
+        return {self.choice_mapping[value]: 1 for value in values}
 
-    def unpack(self, data):
-        choices_sum = getattr(data, self.prefix('mcho'))
-        result = set()
-        while choices_sum:
-            i = int(math.log(choices_sum, 2))
-            choices_sum -= 2 ** i
-            result.add(self.choices[i])
-        return result
+    def unpack(self, sub_fields):
+        values = set()
+        for key, value in self.choice_mapping.items():
+            if getattr(sub_fields, value):
+                values.add(key)
+        return values
 
 
 class StingyMeta(type):
@@ -218,7 +217,13 @@ class Stingy(object):
         self.cache = {}
 
     def _create_union(self):
+        fields = list(chain(*[field.structure_fields
+                            for field in self.fields]))
+        # we need to sort fields by their bit length or type name
+        fields.sort(key=lambda x: x[2] if len(x) == 3 else ctypes.sizeof(x[1]))
+
         class StingyStructure(ctypes.BigEndianStructure):
+            _pack_ = 1
             _fields_ = list(chain(*[field.structure_fields
                             for field in self.fields]))
 
@@ -245,7 +250,7 @@ class Stingy(object):
         # reset all the fields
         self._union.as_bytes = (ctypes.c_ubyte * self._num_bytes)(0)
 
-        # bind subfields name to prevent calling it in a tight loop
+        # bind subfields name to prevent function calls in a tight loop
         subfields = self._union.sub_fields
 
         for field in self.fields:
