@@ -208,7 +208,6 @@ class StingyMeta(type):
 class Stingy(object):
     __metaclass__ = StingyMeta
     fields = None
-    VERSION = None  # to be filled by the child encoder class
 
     def __init__(self):
         self._num_bytes = 0
@@ -234,10 +233,6 @@ class Stingy(object):
                         ("as_byte", ctypes.c_ubyte * self._num_bytes)]
 
         return StingyUnion()
-
-    @staticmethod
-    def get_version(byte_string):
-        return ord(byte_string[-1])
 
     def encode(self, data):
         """
@@ -266,14 +261,11 @@ class Stingy(object):
                         sub_field_name,
                         field_dict[sub_field_name])
         b_array = bytearray(self._union.as_byte)
-        b_array.append(self.VERSION)
         return bytes(b_array)
 
     def decode(self, byte_string):
         cbytearray = (ctypes.c_ubyte * self._num_bytes)
         byte_data = bytearray(byte_string)
-        # remove version info
-        byte_data.pop()
         self._union.as_byte = cbytearray(*byte_data)
 
         return {field.name: field.unpack(self._union.sub_fields)
