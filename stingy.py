@@ -27,10 +27,9 @@ class BaseStingyField(object):
 
 
 class NumberField(BaseStingyField):
-    def __init__(self, max_value=None, num_bits=None):
+    def __init__(self, max_value):
         super(NumberField, self).__init__()
-        assert max_value or num_bits
-        self.num_bits = num_bits or max_value.bit_length()
+        self.num_bits = max_value.bit_length()
 
     def prepare_structure(self):
         type_ = ctypes.c_uint if self.num_bits <= 32 else ctypes.c_ulonglong
@@ -100,8 +99,13 @@ class ChoiceField(BaseStingyField):
 
 
 class DateField(BaseStingyField):
+    def __init__(self, min_year, max_year):
+        super(DateField, self).__init__()
+        self.year_bits = (max_year - min_year).bit_length()
+
     def prepare_structure(self):
-        self.structure_fields = [(self.prefix('year'), ctypes.c_uint, 7),
+        self.structure_fields = [(self.prefix('year'), ctypes.c_uint,
+                                  self.year_bits),
                                  (self.prefix('month'), ctypes.c_uint, 4),
                                  (self.prefix('day'), ctypes.c_uint, 5)]
 
@@ -169,6 +173,7 @@ class MultipleChoiceField(BaseStingyField):
             self.choice_mapping[choice] = bitfield_key
 
     def pack(self, values):
+        assert isinstance(values, set)
         return {self.choice_mapping[value]: 1 for value in values}
 
     def unpack(self, sub_fields):
